@@ -1,0 +1,94 @@
+name: Portfolio Terraform CI-CD
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Select the Terraform operation"
+        required: true
+        type: choice
+        options:
+          - apply
+          - destroy
+        default: apply
+
+      confirm_destroy:
+        description: "Type DESTROY to confirm resource deletion"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-terraform
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    name: Terraform Infrastructure
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      TF_IN_AUTOMATION: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.11.4"
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        if: >-
+          github.event_name == 'push' ||
+          inputs.operation == 'apply'
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform Apply
+        if: >-
+          github.event_name == 'push' ||
+          inputs.operation == 'apply'
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Terraform Destroy
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.operation == 'destroy' &&
+          inputs.confirm_destroy == 'DESTROY'
+        run: terraform destroy -input=false -auto-approve
+
+      - name: Reject Unconfirmed Destroy
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.operation == 'destroy' &&
+          inputs.confirm_destroy != 'DESTROY'
+        run: |
+          echo "Destroy cancelled: type DESTROY to confirm."
+          exit 1
+
+      - name: Show Portfolio Public IP
+        if: >-
+          success() &&
+          (github.event_name == 'push' || inputs.operation == 'apply')
+        run: terraform output
